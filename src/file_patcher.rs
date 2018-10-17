@@ -83,24 +83,150 @@ pub struct Replacement {
 impl Replacement {
     fn print_self(&self) {
         let changeset = Changeset::new(&self.old, &self.new, "");
-        print!("{} ", "--".red());
-        for diff in &changeset.diffs {
-            match diff {
-                Difference::Same(s) => print!("{}", s),
-                Difference::Rem(s) => print!("{}", s.red().underline()),
-                _ => (),
+        let differences = changeset.diffs;
+
+        let mut add_changes = vec![];
+        let mut rem_changes = vec![];
+
+        for difference in differences {
+            let diff = Diff::from_difference(&difference);
+            match diff.diff_type {
+                DiffType::Same => {
+                    add_changes.push(diff.clone());
+                    rem_changes.push(diff.clone());
+                }
+                DiffType::Rem => {
+                    rem_changes.push(diff);
+                }
+                DiffType::Add => {
+                    add_changes.push(diff);
+                }
             }
         }
+        print!("{} ", "--".red());
+        let compact_rem = compact_changeset(&rem_changes);
+        for diff in compact_rem {
+            diff.print_self();
+        }
+
         print!("\n");
+        let compact_add = compact_changeset(&add_changes);
         print!("{} ", "++".green());
-        for diff in &changeset.diffs {
-            match diff {
-                Difference::Same(s) => print!("{}", s),
-                Difference::Add(s) => print!("{}", s.green().underline()),
-                _ => (),
-            }
+        for diff in compact_add {
+            diff.print_self();
         }
     }
+}
+
+// The difference::Difference type is hard to work with,
+// and we cannot implement any trait on it, so use our own
+// little struct intsead, and implement clone()
+#[derive(Debug, PartialEq, Clone)]
+enum DiffType {
+    Rem,
+    Same,
+    Add,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct Diff {
+    diff_type: DiffType, // this makes checking type of diff a lot easier
+    text: String,
+}
+
+impl Diff {
+    fn from_difference(difference: &Difference) -> Diff {
+        match difference {
+            Difference::Add(s) => Self::new_add(s),
+            Difference::Rem(s) => Self::new_rem(s),
+            Difference::Same(s) => Self::new_same(s),
+        }
+    }
+
+    fn new_add(text: &str) -> Diff {
+        Diff {
+            diff_type: DiffType::Add,
+            text: text.to_string(),
+        }
+    }
+
+    fn new_same(text: &str) -> Diff {
+        Diff {
+            diff_type: DiffType::Same,
+            text: text.to_string(),
+        }
+    }
+
+    fn new_rem(text: &str) -> Diff {
+        Diff {
+            diff_type: DiffType::Rem,
+            text: text.to_string(),
+        }
+    }
+
+    fn print_self(self) {
+        let desc = match self.diff_type {
+            DiffType::Same => self.text.normal(),
+            DiffType::Rem => self.text.red().underline(),
+            DiffType::Add => self.text.green().underline(),
+        };
+        print!("{}", desc)
+    }
+}
+
+fn is_add_sandwich(a: &Diff, b: &Diff, c: &Diff) -> bool {
+    a.diff_type == DiffType::Add && b.diff_type == DiffType::Same && c.diff_type == DiffType::Add
+}
+
+fn is_rem_sandwich(a: &Diff, b: &Diff, c: &Diff) -> bool {
+    a.diff_type == DiffType::Rem && b.diff_type == DiffType::Same && c.diff_type == DiffType::Rem
+}
+
+fn squash(changeset: &Vec<Diff>, index: usize) -> Option<Diff> {
+    let n = changeset.len();
+    if index < 1 {
+        return None;
+    }
+    if index >= (n - 1) {
+        return None;
+    }
+    let current = &changeset[index];
+    let previous = &changeset[index - 1];
+    let next = &changeset[index + 1];
+    let squashed_text = previous.text.to_string() + &current.text + &next.text;
+    if is_add_sandwich(&previous, &current, &next) {
+        return Some(Diff::new_add(&squashed_text));
+    }
+    if is_rem_sandwich(&previous, &current, &next) {
+        return Some(Diff::new_rem(&squashed_text));
+    }
+    None
+}
+
+fn compact_changeset(changeset: &Vec<Diff>) -> Vec<Diff> {
+    let mut res = vec![];
+    let n = changeset.len();
+    let mut skip_next = false;
+    for i in 0..n {
+        let current_diff = &changeset[i];
+        let squashed = squash(&changeset, i);
+        if current_diff.text.len() < 3 {
+            if let Some(squash) = squashed {
+                // replace last 'add' or 'rm' chunk
+                res[i - 1] = squash;
+                // skip next chunk
+                skip_next = true;
+            } else {
+                // same is too long, do nothing
+            }
+        } else {
+            if !skip_next {
+                res.push(current_diff.clone());
+            }
+            skip_next = false;
+        }
+    }
+    res
 }
 
 #[cfg(test)]
@@ -109,6 +235,103 @@ mod tests {
     use super::*;
     use query;
     use std::fs;
+
+    #[test]
+    fn test_compact_diff_empty() {
+        let change = vec![];
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![]);
+    }
+
+    #[test]
+    fn test_compact_diff_just_one() {
+        let change = vec![Diff::new_add("some stuff")];
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![Diff::new_add("some stuff")]);
+    }
+
+    #[test]
+    fn test_compact_diff_just_two() {
+        let change = vec![Diff::new_add("one"), Diff::new_rem("two")];
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![Diff::new_add("one"), Diff::new_rem("two")]);
+    }
+
+    #[test]
+    fn test_compact_diff_replace_small_same_with_previous_and_next_add() {
+        let change = vec![
+            Diff::new_add("one"),
+            Diff::new_same("_"),
+            Diff::new_add("two"),
+        ];
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![Diff::new_add("one_two")]);
+    }
+
+    #[test]
+    fn test_compact_diff_do_not_replace_big_same() {
+        let change = vec![
+            Diff::new_add("one "),
+            Diff::new_same(" - and this is - "),
+            Diff::new_add(" three"),
+        ];
+        let actual = compact_changeset(&change);
+        assert_eq!(
+            actual,
+            vec![
+                Diff::new_add("one "),
+                Diff::new_same(" - and this is - "),
+                Diff::new_add(" three"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_compact_diff_do_not_keep_skipping() {
+        let change = vec![
+            Diff::new_add("one"),
+            Diff::new_same("_"),
+            Diff::new_add("two"),
+            Diff::new_add("three"),
+            Diff::new_same(" - and - "),
+            Diff::new_add("four"),
+        ];
+        let actual = compact_changeset(&change);
+        assert_eq!(
+            actual,
+            vec![
+                Diff::new_add("one_two"),
+                Diff::new_add("three"),
+                Diff::new_same(" - and - "),
+                Diff::new_add("four"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_compact_diff_rem_sandwich() {
+        let change = vec![
+            Diff::new_rem("one"),
+            Diff::new_same("_"),
+            Diff::new_rem("two"),
+        ];
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![Diff::new_rem("one_two")]);
+    }
+
+    #[test]
+    fn test_compact_diff_two_sandwhiches() {
+        let change = vec![
+            Diff::new_add("one"),
+            Diff::new_same("_"),
+            Diff::new_add("two"),
+            Diff::new_same("_"),
+            Diff::new_add("three"),
+        ];
+
+        let actual = compact_changeset(&change);
+        assert_eq!(actual, vec![Diff::new_add("one_two_three")]);
+    }
 
     #[test]
     fn test_compute_replacements() {
