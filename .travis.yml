@@ -14,9 +14,9 @@ script:
 
 
 before_deploy:
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then python3 gen_artifacts.py --version $TRAVIS_TAG --platform linux-x86_64 ; fi
-  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew update && brew bundle ; fi  # install python3
-  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then python3 gen_artifacts.py --version $TRAVIS_TAG --platform osx ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then python3 ci/gen_artifacts.py --version $TRAVIS_TAG --platform linux-x86_64 ; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew update && brew bundle --file ci/Brewfile ; fi  # install python3
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then python3 ci/gen_artifacts.py --version $TRAVIS_TAG --platform osx ; fi
 
 deploy:
   skip_cleanup: true
